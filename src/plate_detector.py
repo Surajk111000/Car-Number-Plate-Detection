@@ -5,9 +5,13 @@ Handles real-time number plate detection using TensorFlow object detection model
 
 import numpy as np
 import cv2
-import tensorflow as tf
-from typing import Tuple, List, Dict, Optional
+from typing import Tuple, List, Dict, Optional, TYPE_CHECKING
 import logging
+import json
+from pathlib import Path
+
+if TYPE_CHECKING:
+    import tensorflow as tf
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +41,34 @@ class PlateDetector:
         self.padding = padding
         self.detect_fn = None
         self.detection_count = 0
+        self.is_mock_mode = False
         self._load_model()
+    
+    def _is_mock_model(self) -> bool:
+        """Check if this is a mock model directory"""
+        try:
+            config_path = Path(self.model_path) / "config.json"
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+                    return config.get("type") == "mock"
+        except:
+            pass
+        return False
     
     def _load_model(self):
         """Load the pre-trained detection model"""
         try:
+            # Check if it's a mock model
+            if self._is_mock_model():
+                logger.info(f"Loading MOCK model from {self.model_path}...")
+                self.is_mock_mode = True
+                logger.info("Mock model loaded (will return dummy detections for testing)")
+                return
+            
+            # For real models, lazy-import TensorFlow
             logger.info(f"Loading model from {self.model_path}...")
+            import tensorflow as tf
             self.detect_fn = tf.saved_model.load(self.model_path)
             logger.info("Model loaded successfully")
         except FileNotFoundError:
@@ -51,6 +77,26 @@ class PlateDetector:
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
+    
+    def _get_mock_detections(self, image: np.ndarray) -> Dict:
+        """Return mock detections for testing without a real model"""
+        height, width = image.shape[:2]
+        
+        # Return 2 dummy plate detections in normalized coordinates [ymin, xmin, ymax, xmax]
+        detection_boxes = np.array([
+            [0.2, 0.15, 0.55, 0.9],   # Top plate
+            [0.35, 0.1, 0.65, 0.85],  # Bottom plate
+        ], dtype=np.float32)
+        
+        detection_scores = np.array([0.95, 0.88], dtype=np.float32)
+        detection_classes = np.array([0, 0], dtype=np.int64)
+        
+        return {
+            'detection_boxes': detection_boxes,
+            'detection_scores': detection_scores,
+            'detection_classes': detection_classes,
+            'num_detections': 2
+        }
     
     def detect(self, image: np.ndarray) -> Dict:
         """
@@ -74,14 +120,32 @@ class PlateDetector:
             logger.error(f"Invalid image shape: {image.shape}")
             raise ValueError(f"Expected 2D or 3D image, got shape {image.shape}")
         
-        # Convert BGR to RGB for TensorFlow
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Return mock detections if in mock mode
+        if self.is_mock_mode:
+            logger.debug("Using mock detections for testing")
+            detections = self._get_mock_detections(image)
+            detections = self._filter_detections(detections)
+            detections = self._apply_nms(detections, image.shape)
+            self.detection_count = detections['num_detections']
+            return detections
+        
+        # Convert image to RGB for TensorFlow
+        if len(image.shape) == 2:
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        else:
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Lazy import TensorFlow for real model inference
+        import tensorflow as tf
         
         # Convert to tensor and add batch dimension
         input_tensor = tf.convert_to_tensor(image_rgb)
-        input_tensor = input_tensor[tf.newaxis, ...]
+        input_tensor = tf.expand_dims(input_tensor, axis=0)
         
         try:
+            if self.detect_fn is None:
+                raise RuntimeError("Detection model is not loaded")
+
             # Run detection
             detections = self.detect_fn(input_tensor)
             
@@ -109,9 +173,9 @@ class PlateDetector:
     def _empty_detections() -> Dict:
         """Return empty detection dictionary"""
         return {
-            'detection_boxes': np.array([]),
-            'detection_scores': np.array([]),
-            'detection_classes': np.array([]),
+            'detection_boxes': np.empty((0, 4), dtype=np.float32),
+            'detection_scores': np.empty((0,), dtype=np.float32),
+            'detection_classes': np.empty((0,), dtype=np.float32),
             'num_detections': 0
         }
     
@@ -132,7 +196,7 @@ class PlateDetector:
             'detection_boxes': detections['detection_boxes'][valid_idx],
             'detection_scores': scores[valid_idx],
             'detection_classes': detections['detection_classes'][valid_idx],
-            'num_detections': np.sum(valid_idx)
+            'num_detections': int(np.sum(valid_idx))
         }
         
         logger.debug(f"Filtered {len(scores)} detections, kept {filtered['num_detections']}")
@@ -220,6 +284,7 @@ class PlateDetector:
             inter = w * h
             
             union = areas[i] + areas[order[1:]] - inter
+            union = np.maximum(union, 1e-6)
             iou = inter / union
             
             # Keep boxes with IOU below threshold

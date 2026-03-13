@@ -12,6 +12,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Fix for PIL/Pillow compatibility with EasyOCR
+# EasyOCR uses deprecated PIL.Image.ANTIALIAS which was removed in Pillow 10+
+try:
+    from PIL import Image
+    if not hasattr(Image, 'ANTIALIAS'):
+        Image.ANTIALIAS = Image.Resampling.LANCZOS
+        logger.info("Applied PIL.Image.ANTIALIAS compatibility fix")
+except Exception as e:
+    logger.warning(f"Failed to apply PIL compatibility fix: {e}")
+
 # Configuration constants
 PLATE_PATTERN = r'^[A-Z0-9\-\s]+$'  # Pattern for valid plate text
 MIN_CONFIDENCE = 0.3

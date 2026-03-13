@@ -38,6 +38,89 @@ By leveraging OpenCV and computer vision techniques, this project aims to contri
 * [openCV](https://opencv.org/): It is a library mainly used at real-time computer vision.
 * [Tensorflow](https://github.com/tensorflow/models) : Here I used Tensorflow object detection Model (SSD MobileNet V2 FPNLite 320x320) to detect the plate trained on a Kaggle Dataset.
 * Python Libraries: Most of the libraries are mentioned in [requirements.txt](https://github.com/harshitkd/Real-Time-Number-Plate-Recognition/blob/main/requirements.txt) but some of the libraries and requirements depends on the user's machines, whether its installed or not and also the libraries for Tensorflow Object Detection (TFOD) consistently change.
+
+## API Deployment
+
+This repository now includes a deployable Flask API for plate detection and OCR.
+
+### API Files
+
+- `app.py` - Flask entry point
+- `src/api_service.py` - API service and prediction pipeline
+- `src/plate_detector.py` - plate detection module
+- `src/ocr.py` - OCR module
+- `Procfile` - production startup command for platforms like Render
+- `.env.example` - environment variable template
+
+### API Endpoints
+
+#### `GET /health`
+Returns service readiness, whether the model is loaded, and OCR status.
+
+#### `POST /predict`
+Accepts an image upload using `multipart/form-data` with the key `image`.
+
+Optional field:
+- `include_visualization=true` to return a Base64-encoded result image with boxes drawn.
+
+### Local API Run
+
+<pre>
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+</pre>
+
+Copy `.env.example` to `.env` and update `MODEL_PATH` to your exported TensorFlow SavedModel directory.
+
+Then run:
+
+<pre>
+python app.py
+</pre>
+
+API will start on `http://127.0.0.1:5000`.
+
+### Example Request
+
+<pre>
+curl -X POST http://127.0.0.1:5000/predict ^
+	-F "image=@test_image.jpg" ^
+	-F "include_visualization=true"
+</pre>
+
+### Deploy on Render
+
+1. Push the repository to GitHub.
+2. Create a new Web Service on Render.
+3. Set build command:
+
+<pre>
+pip install -r requirements.txt
+</pre>
+
+4. Set start command:
+
+<pre>
+gunicorn app:app
+</pre>
+
+5. Add environment variables from `.env.example`, especially:
+	 - `MODEL_PATH`
+	 - `ENABLE_OCR`
+	 - `OCR_USE_GPU`
+
+### API Response Summary
+
+The prediction response includes:
+
+- image metadata
+- number of detections
+- inference time
+- bounding boxes
+- OCR text and confidence
+- optional visualization image in Base64
+
 # Steps
 These outline the steps I used to go through in order to get up and running with ANPR. 
 
