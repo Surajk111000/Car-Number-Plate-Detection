@@ -1,1 +1,1 @@
-web: uvicorn src.api_service:app --host 0.0.0.0 --port $PORT
+web: gunicorn app:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
