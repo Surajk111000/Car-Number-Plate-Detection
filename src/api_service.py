@@ -104,17 +104,14 @@ class PlateRecognitionService:
 
     def _load_components(self) -> None:
         try:
-            if not self.config.model_path:
-                raise ValueError("MODEL_PATH environment variable is required")
+            logger.info("Loading specialized license plate detector...")
+            from src.license_plate_detector import LicensePlateTextDetector
 
-            from src.plate_detector import PlateDetector
-
-            self.detector = PlateDetector(
-                model_path=self.config.model_path,
-                confidence_threshold=self.config.confidence_threshold,
-                nms_threshold=self.config.nms_threshold,
-                padding=self.config.padding,
+            self.detector = LicensePlateTextDetector(
+                confidence_threshold=self.config.confidence_threshold
             )
+
+            logger.info("✅ License plate text detector loaded successfully")
 
             # Try to load OCR, but don't fail if it's not available
             if self.config.enable_ocr:
@@ -188,7 +185,9 @@ class PlateRecognitionService:
             if self.ocr is not None:
                 try:
                     logger.info(f"Extracting OCR for plate {idx}, image shape: {plate_image.shape if hasattr(plate_image, 'shape') else 'unknown'}")
-                    ocr_result = self.ocr.extract_text(plate_image)
+                    # Use lower confidence threshold for better detection on various plate formats
+                    # including Indian, European, and other formats
+                    ocr_result = self.ocr.extract_text(plate_image, confidence_threshold=0.1)
                     logger.info(f"OCR result for plate {idx}: {ocr_result}")
                     plate_payload["ocr"] = {
                         "raw_text": ocr_result.get("full_text", ""),
@@ -258,8 +257,9 @@ def _service_config_from_env() -> ServiceConfig:
     languages = tuple(
         lang.strip() for lang in os.getenv("OCR_LANGUAGES", "en").split(",") if lang.strip()
     )
+    
     return ServiceConfig(
-        model_path=os.getenv("MODEL_PATH", ""),
+        model_path="pretrained",  # Using YOLOv8 pretrained
         confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.5")),
         nms_threshold=float(os.getenv("NMS_THRESHOLD", "0.5")),
         padding=int(os.getenv("PADDING", "10")),

@@ -247,11 +247,11 @@ class PlateOCR:
         
         # Optional: Resize if image is too small
         height, width = thresh.shape
-        if width < 100 or height < 30:
-            scale = max(100 / width, 30 / height)
+        if width < 150 or height < 40:  # Increased thresholds for better OCR
+            scale = max(150 / width, 40 / height)
             thresh = cv2.resize(thresh, None, fx=scale, fy=scale, 
                                interpolation=cv2.INTER_CUBIC)
-            logger.debug(f"Resized image by factor {scale:.2f}")
+            logger.debug(f"Resized small plate image by factor {scale:.2f} from {width}x{height} to {int(width*scale)}x{int(height*scale)}")
         
         return thresh
     

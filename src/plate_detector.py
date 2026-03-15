@@ -69,14 +69,27 @@ class PlateDetector:
             # For real models, lazy-import TensorFlow
             logger.info(f"Loading model from {self.model_path}...")
             import tensorflow as tf
-            self.detect_fn = tf.saved_model.load(self.model_path)
-            logger.info("Model loaded successfully")
+            import os
+            
+            # Check if it's a Keras h5 file
+            h5_path = os.path.join(self.model_path, "model.h5")
+            if os.path.exists(h5_path):
+                logger.info(f"Loading Keras model from {h5_path}...")
+                self.detect_fn = tf.keras.models.load_model(h5_path)
+                logger.info("Keras model loaded successfully")
+            else:
+                # Try loading as SavedModel format
+                logger.info(f"Loading SavedModel from {self.model_path}...")
+                self.detect_fn = tf.saved_model.load(self.model_path)
+                logger.info("SavedModel loaded successfully")
+                
         except FileNotFoundError:
             logger.error(f"Model file not found at {self.model_path}")
             raise
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
+
     
     def _get_mock_detections(self, image: np.ndarray) -> Dict:
         """Return mock detections for testing without a real model"""
@@ -147,13 +160,21 @@ class PlateDetector:
                 raise RuntimeError("Detection model is not loaded")
 
             # Run detection
-            detections = self.detect_fn(input_tensor)
+            output = self.detect_fn(input_tensor)
             
-            # Extract detections
-            num_detections = int(detections.pop('num_detections'))
-            detections = {key: value[0, :num_detections].numpy()
-                          for key, value in detections.items()}
-            detections['num_detections'] = num_detections
+            # Handle different model output formats
+            if isinstance(output, dict):
+                # SavedModel format with 'num_detections' key
+                num_detections = int(output.pop('num_detections', 0))
+                detections = {key: value[0, :num_detections].numpy()
+                              for key, value in output.items()}
+                detections['num_detections'] = num_detections
+            elif isinstance(output, (list, tuple)):
+                # Keras model format: [confidence, bbox, class]
+                detections = self._convert_keras_output_to_detections(output, image.shape)
+            else:
+                logger.warning("Unknown model output format")
+                return self._empty_detections()
             
             # Filter by confidence threshold
             detections = self._filter_detections(detections)
@@ -168,6 +189,66 @@ class PlateDetector:
         except Exception as e:
             logger.error(f"Detection failed: {e}")
             return self._empty_detections()
+    
+    def _convert_keras_output_to_detections(self, output: tuple, image_shape: Tuple) -> Dict:
+        """
+        Convert Keras model output to standard detection format
+        
+        Args:
+            output: Tuple of (confidence, bbox, class_pred)
+            image_shape: Original image shape
+            
+        Returns:
+            Dictionary with detection_boxes, detection_scores, detection_classes, num_detections
+        """
+        confidence, bbox, class_pred = output
+        
+        # Convert tensors to numpy if needed
+        if hasattr(confidence, 'numpy'):
+            confidence = confidence.numpy()
+        if hasattr(bbox, 'numpy'):
+            bbox = bbox.numpy()
+        if hasattr(class_pred, 'numpy'):
+            class_pred = class_pred.numpy()
+        
+        # Remove batch dimension
+        confidence = confidence[0] if len(confidence.shape) > 1 else confidence
+        bbox = bbox[0] if len(bbox.shape) > 1 else bbox
+        class_pred = class_pred[0] if len(class_pred.shape) > 1 else class_pred
+        
+        # Handle confidence as scalar
+        if hasattr(confidence, 'shape') and confidence.shape == ():
+            confidence_score = float(confidence)
+        elif hasattr(confidence, '__len__'):
+            confidence_score = float(confidence[0]) if len(confidence) > 0 else 0.0
+        else:
+            confidence_score = float(confidence)
+        
+        # Get class predictions
+        if len(class_pred.shape) > 0:
+            detection_classes = np.argmax(class_pred, axis=-1) if class_pred.ndim > 0 else np.array([0])
+            detection_scores = np.array([confidence_score])
+        else:
+            detection_classes = np.array([0])
+            detection_scores = np.array([confidence_score])
+        
+        # Reshape bbox if needed
+        if bbox.ndim == 1 and len(bbox) == 4:
+            bbox = bbox.reshape(1, 4)
+        elif bbox.ndim == 1:
+            bbox = np.zeros((1, 4), dtype=np.float32)
+        
+        num_detections = len(bbox) if bbox.ndim > 1 else 1
+        
+        logger.debug(f"Keras output: confidence={confidence_score:.4f}, bbox shape={bbox.shape}, num_detections={num_detections}")
+        
+        return {
+            'detection_boxes': bbox.astype(np.float32),
+            'detection_scores': detection_scores.astype(np.float32),
+            'detection_classes': detection_classes.astype(np.int64),
+            'num_detections': num_detections
+        }
+
     
     @staticmethod
     def _empty_detections() -> Dict:
