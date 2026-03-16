@@ -1,9 +1,10 @@
 """
 OCR Module
 Handles optical character recognition for number plate text extraction
+Uses lightweight PaddleOCR (no PyTorch dependency)
 """
 
-import easyocr
+from paddleocr import PaddleOCR
 import numpy as np
 import cv2
 import re
@@ -12,16 +13,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Fix for PIL/Pillow compatibility with EasyOCR
-# EasyOCR uses deprecated PIL.Image.ANTIALIAS which was removed in Pillow 10+
-try:
-    from PIL import Image
-    if not hasattr(Image, 'ANTIALIAS'):
-        Image.ANTIALIAS = Image.Resampling.LANCZOS
-        logger.info("Applied PIL.Image.ANTIALIAS compatibility fix")
-except Exception as e:
-    logger.warning(f"Failed to apply PIL compatibility fix: {e}")
-
 # Configuration constants
 PLATE_PATTERN = r'^[A-Z0-9\-\s]+$'  # Pattern for valid plate text
 MIN_CONFIDENCE = 0.3
@@ -29,59 +20,45 @@ DEFAULT_MORPH_KERNEL = (5, 5)
 
 
 class PlateOCR:
-    """Performs OCR on license plate images to extract text"""
+    """Performs OCR on license plate images using lightweight PaddleOCR"""
     
-    def __init__(self, languages: List[str] = None, use_gpu: bool = None):
+    def __init__(self, languages: List[str] = None, use_gpu: bool = False):
         """
-        Initialize OCR reader
+        Initialize OCR reader with PaddleOCR (no PyTorch, optimized for edge)
         
         Args:
             languages: List of language codes for OCR (default: ['en'])
-            use_gpu: Use GPU for OCR. None = auto-detect, True = force GPU, False = force CPU
+            use_gpu: Use GPU for OCR (default: False for compatibility)
         """
         if languages is None:
             languages = ['en']
         
         self.languages = languages
-        self.reader = None
-        self.use_gpu = use_gpu if use_gpu is not None else self._check_gpu_availability()
+        self.ocr = None
+        self.use_gpu = use_gpu
         self._load_reader()
     
-    @staticmethod
-    def _check_gpu_availability() -> bool:
-        """
-        Check if GPU is available for OCR
-        
-        Returns:
-            True if GPU is available, False otherwise
-        """
-        try:
-            import torch
-            gpu_available = torch.cuda.is_available()
-            if gpu_available:
-                logger.info(f"GPU detected: {torch.cuda.get_device_name(0)}")
-            else:
-                logger.info("No GPU detected, using CPU")
-            return gpu_available
-        except Exception as e:
-            logger.warning(f"Could not check GPU availability: {e}, using CPU")
-            return False
-    
     def _load_reader(self):
-        """Initialize EasyOCR reader"""
+        """Initialize PaddleOCR - lightweight, no PyTorch dependency"""
         try:
-            logger.info(f"Initializing OCR reader for languages: {self.languages}, GPU={self.use_gpu}...")
-            self.reader = easyocr.Reader(self.languages, gpu=self.use_gpu)
-            logger.info("OCR reader initialized successfully")
+            logger.info(f"Initializing PaddleOCR for languages: {self.languages}, GPU={self.use_gpu}...")
+            # PaddleOCR is optimized for edge devices
+            # use_angle_clf=False reduces memory significantly
+            self.ocr = PaddleOCR(
+                use_gpu=self.use_gpu,
+                use_angle_clf=False,
+                lang='en'
+            )
+            logger.info("✅ PaddleOCR initialized successfully (lightweight, no PyTorch)")
         except Exception as e:
-            logger.error(f"Failed to initialize OCR reader: {e}")
+            logger.error(f"Failed to initialize PaddleOCR: {e}")
             raise
     
     def extract_text(self, image: np.ndarray, 
                     confidence_threshold: float = MIN_CONFIDENCE,
                     clean_text: bool = True) -> Dict:
         """
-        Extract text from a number plate image
+        Extract text from a number plate image using PaddleOCR
         
         Args:
             image: Input plate image
@@ -100,8 +77,9 @@ class PlateOCR:
             # Preprocess image
             processed_image = self._preprocess_image(image)
             
-            # Run OCR
-            result = self.reader.readtext(processed_image)
+            # Run OCR with PaddleOCR
+            # Returns list of list of [bbox, (text, confidence)]
+            result = self.ocr.ocr(processed_image, cls=False)
             
             # Filter by confidence and format results
             extracted_text = {
@@ -114,20 +92,18 @@ class PlateOCR:
                 'is_valid_plate': False
             }
             
-            if not result:
+            if not result or not result[0]:
                 logger.info("No text detected in image")
                 return extracted_text
             
             total_confidence = 0.0
-            for detection in result:
-                if len(detection) >= 3 and detection[2] >= confidence_threshold:
-                    text = detection[1]
-                    confidence = detection[2]
-                    
-                    extracted_text['text'].append(text)
-                    extracted_text['confidence'].append(confidence)
-                    extracted_text['boxes'].append(detection[0])
-                    total_confidence += confidence
+            for line in result:
+                for (bbox, (text, confidence)) in line:
+                    if confidence >= confidence_threshold:
+                        extracted_text['text'].append(text)
+                        extracted_text['confidence'].append(confidence)
+                        extracted_text['boxes'].append(bbox)
+                        total_confidence += confidence
             
             if extracted_text['text']:
                 # Combine all text
@@ -321,5 +297,6 @@ class PlateOCR:
         return {
             'languages': self.languages,
             'using_gpu': self.use_gpu,
-            'reader_available': self.reader is not None
+            'ocr_available': self.ocr is not None,
+            'engine': 'PaddleOCR (lightweight, no PyTorch)'
         }

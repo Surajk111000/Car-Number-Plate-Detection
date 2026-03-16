@@ -1,7 +1,8 @@
 """
-Specialized License Plate Detection using EasyOCR
+Specialized License Plate Detection using PaddleOCR
 Uses text detection to find license plate regions
 This is better for license plate detection than general object detection
+Lightweight alternative optimized for edge devices (no PyTorch dependency)
 """
 
 import logging
@@ -12,16 +13,17 @@ import cv2
 logger = logging.getLogger(__name__)
 
 try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
+    from paddleocr import PaddleOCR
+    PADDLEOCR_AVAILABLE = True
 except ImportError:
-    EASYOCR_AVAILABLE = False
+    PADDLEOCR_AVAILABLE = False
 
 
 class LicensePlateTextDetector:
     """
-    Detect license plates by finding text regions with EasyOCR
+    Detect license plates by finding text regions with PaddleOCR
     More reliable than general object detection for plates
+    Lightweight, no PyTorch dependency - optimized for 512MB Render free tier
     """
     
     def __init__(self, confidence_threshold: float = 0.5):
@@ -31,22 +33,23 @@ class LicensePlateTextDetector:
         Args:
             confidence_threshold: Minimum confidence for text detection
         """
-        if not EASYOCR_AVAILABLE:
-            raise ImportError("EasyOCR not installed. Install with: pip install easyocr")
+        if not PADDLEOCR_AVAILABLE:
+            raise ImportError("PaddleOCR not installed. Install with: pip install paddleocr")
         
         self.confidence_threshold = confidence_threshold
-        self.reader = None
+        self.ocr = None
         self._load_reader()
     
     def _load_reader(self) -> None:
-        """Load EasyOCR reader for text detection"""
-        logger.info("Initializing EasyOCR for text detection...")
+        """Load PaddleOCR for text detection"""
+        logger.info("Initializing PaddleOCR for text detection (lightweight, no PyTorch)...")
         try:
-            # Create reader for text detection (not recognition, just bounding boxes)
-            self.reader = easyocr.Reader(['en'], gpu=False)
-            logger.info("✅ EasyOCR text detector loaded successfully")
+            # PaddleOCR is optimized for edge devices
+            # use_angle_clf=False reduces memory footprint significantly
+            self.ocr = PaddleOCR(use_gpu=False, use_angle_clf=False, lang='en')
+            logger.info("✅ PaddleOCR detector loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to load EasyOCR: {e}")
+            logger.error(f"Failed to load PaddleOCR: {e}")
             raise
     
     def detect(self, image: np.ndarray) -> Dict[str, Any]:
@@ -59,15 +62,16 @@ class LicensePlateTextDetector:
         Returns:
             Dictionary with detections in standard format
         """
-        if self.reader is None:
-            logger.error("Reader not initialized")
+        if self.ocr is None:
+            logger.error("OCR not initialized")
             return self._empty_detections()
         
         try:
-            # Run text detection
-            results = self.reader.readtext(image, detail=1)  # detail=1 to get confidence
+            # PaddleOCR returns list of results for each text region
+            # Each result is [bbox, (text, confidence)]
+            results = self.ocr.ocr(image, cls=False)
             
-            if not results:
+            if not results or not results[0]:
                 logger.debug("No text regions found")
                 return self._empty_detections()
             
@@ -78,37 +82,38 @@ class LicensePlateTextDetector:
             
             height, width = image.shape[:2]
             
-            for (bbox, text, confidence) in results:
-                # Confidence is already 0-1, but text confidence might be low for plates
-                # Use (confidence + 0.3) boost to account for license plate specifics
-                boosted_conf = min(1.0, confidence + 0.3)
-                
-                if boosted_conf < self.confidence_threshold:
-                    continue
-                
-                # bbox is list of 4 corner points: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
-                try:
-                    points = np.array(bbox)
-                    y_min = np.min(points[:, 1]) / height
-                    y_max = np.max(points[:, 1]) / height
-                    x_min = np.min(points[:, 0]) / width
-                    x_max = np.max(points[:, 0]) / width
+            for line in results:
+                for (bbox, confidence_text) in line:
+                    text, confidence = confidence_text
+                    # Confidence is already 0-1, boost for license plate specifics
+                    boosted_conf = min(1.0, confidence + 0.2)
                     
-                    # Validate
-                    y_min = max(0, min(1, y_min))
-                    y_max = max(0, min(1, y_max))
-                    x_min = max(0, min(1, x_min))
-                    x_max = max(0, min(1, x_max))
+                    if boosted_conf < self.confidence_threshold:
+                        continue
                     
-                    detection_boxes.append([y_min, x_min, y_max, x_max])
-                    detection_scores.append(boosted_conf)
-                    detection_classes.append(0)  # License plate class
+                    # bbox is list of 4 corner points: [[x,y], [x,y], [x,y], [x,y]]
+                    try:
+                        points = np.array(bbox)
+                        y_min = np.min(points[:, 1]) / height
+                        y_max = np.max(points[:, 1]) / height
+                        x_min = np.min(points[:, 0]) / width
+                        x_max = np.max(points[:, 0]) / width
+                        
+                        # Validate
+                        y_min = max(0, min(1, y_min))
+                        y_max = max(0, min(1, y_max))
+                        x_min = max(0, min(1, x_min))
+                        x_max = max(0, min(1, x_max))
+                        
+                        detection_boxes.append([y_min, x_min, y_max, x_max])
+                        detection_scores.append(boosted_conf)
+                        detection_classes.append(0)  # License plate class
+                        
+                        logger.debug(f"Found text region: '{text}' confidence: {confidence:.2f} (boosted: {boosted_conf:.2f})")
                     
-                    logger.debug(f"Found text region: '{text}' confidence: {confidence:.2f} (boosted: {boosted_conf:.2f})")
-                
-                except Exception as e:
-                    logger.warning(f"Error processing detection box: {e}")
-                    continue
+                    except Exception as e:
+                        logger.warning(f"Error processing detection box: {e}")
+                        continue
             
             num_detections = len(detection_boxes)
             logger.info(f"Text detection found {num_detections} potential plates")
@@ -119,7 +124,7 @@ class LicensePlateTextDetector:
                 'detection_classes': np.array(detection_classes, dtype=np.int64),
                 'num_detections': num_detections,
                 'is_pretrained': True,
-                'model': 'EasyOCR-TextDetection'
+                'model': 'PaddleOCR-TextDetection'
             }
         
         except Exception as e:
@@ -219,5 +224,5 @@ class LicensePlateTextDetector:
             'detection_classes': np.empty((0,), dtype=np.int64),
             'num_detections': 0,
             'is_pretrained': True,
-            'model': 'EasyOCR-TextDetection'
+            'model': 'PaddleOCR-TextDetection'
         }
