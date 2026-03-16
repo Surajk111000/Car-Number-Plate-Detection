@@ -43,10 +43,10 @@ class PlateOCR:
         try:
             logger.info(f"Initializing PaddleOCR for languages: {self.languages}, GPU={self.use_gpu}...")
             # PaddleOCR is optimized for edge devices
-            # use_angle_clf=False reduces memory significantly
+            # device='cpu' for 512MB memory optimization
             self.ocr = PaddleOCR(
-                use_gpu=self.use_gpu,
-                use_angle_clf=False,
+                device='cpu',  # CPU mode for 512MB free tier
+                use_angle_cls=False,  # Reduce memory footprint
                 lang='en'
             )
             logger.info("✅ PaddleOCR initialized successfully (lightweight, no PyTorch)")

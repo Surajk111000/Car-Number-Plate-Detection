@@ -45,8 +45,8 @@ class LicensePlateTextDetector:
         logger.info("Initializing PaddleOCR for text detection (lightweight, no PyTorch)...")
         try:
             # PaddleOCR is optimized for edge devices
-            # use_angle_clf=False reduces memory footprint significantly
-            self.ocr = PaddleOCR(use_gpu=False, use_angle_clf=False, lang='en')
+            # device='cpu' for 512MB memory optimization
+            self.ocr = PaddleOCR(device='cpu', use_angle_cls=False, lang='en')
             logger.info("✅ PaddleOCR detector loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load PaddleOCR: {e}")
