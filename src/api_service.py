@@ -75,6 +75,9 @@ class HealthResponse(BaseModel):
     ocr_enabled: bool
     startup_error: Optional[str]
     config: Dict[str, Any]
+    
+    class Config:
+        protected_namespaces = ()
 
 
 class IndexResponse(BaseModel):
@@ -100,6 +103,7 @@ class PlateRecognitionService:
         self.detector: Optional["PlateDetector"] = None
         self.ocr: Optional["PlateOCR"] = None
         self.startup_error: Optional[str] = None
+        self._ocr_loaded = False
         self._load_components()
 
     def _load_components(self) -> None:
@@ -112,30 +116,39 @@ class PlateRecognitionService:
             )
 
             logger.info("✅ License plate text detector loaded successfully")
-
-            # Try to load OCR, but don't fail if it's not available
-            if self.config.enable_ocr:
-                try:
-                    from src.ocr import PlateOCR
-                    
-                    ocr_kwargs: Dict[str, Any] = {
-                        "languages": list(self.config.ocr_languages),
-                    }
-                    if self.config.ocr_use_gpu is not None:
-                        ocr_kwargs["use_gpu"] = self.config.ocr_use_gpu
-                    self.ocr = PlateOCR(**ocr_kwargs)
-                except ImportError as ie:
-                    logger.warning(f"OCR not available: {ie}. Predictions will work without OCR.")
-                    self.ocr = None
-                except Exception as ocr_exc:
-                    logger.warning(f"Failed to initialize OCR: {ocr_exc}. Predictions will work without OCR.")
-                    self.ocr = None
+            # Note: OCR will be lazy-loaded on first prediction for memory efficiency
 
             self.startup_error = None
             logger.info("Plate recognition service initialized successfully")
         except Exception as exc:
             self.startup_error = str(exc)
             logger.exception("Failed to initialize service")
+
+    def _lazy_load_ocr(self) -> None:
+        """Lazy load OCR on first prediction request for memory efficiency"""
+        if self._ocr_loaded or not self.config.enable_ocr:
+            return
+        
+        try:
+            logger.info("Lazy-loading OCR component...")
+            from src.ocr import PlateOCR
+            
+            ocr_kwargs: Dict[str, Any] = {
+                "languages": list(self.config.ocr_languages),
+            }
+            if self.config.ocr_use_gpu is not None:
+                ocr_kwargs["use_gpu"] = self.config.ocr_use_gpu
+            self.ocr = PlateOCR(**ocr_kwargs)
+            self._ocr_loaded = True
+            logger.info("✅ OCR component loaded successfully")
+        except ImportError as ie:
+            logger.warning(f"OCR not available: {ie}. Predictions will work without OCR.")
+            self.ocr = None
+            self._ocr_loaded = True
+        except Exception as ocr_exc:
+            logger.warning(f"Failed to initialize OCR: {ocr_exc}. Predictions will work without OCR.")
+            self.ocr = None
+            self._ocr_loaded = True
 
     def is_ready(self) -> bool:
         return self.detector is not None and self.startup_error is None
@@ -158,6 +171,10 @@ class PlateRecognitionService:
     def predict(self, image: np.ndarray, include_visualization: bool = False) -> Dict[str, Any]:
         if not self.is_ready() or self.detector is None:
             raise RuntimeError(self.startup_error or "Service is not ready")
+
+        # Lazy load OCR if needed
+        if self.config.enable_ocr:
+            self._lazy_load_ocr()
 
         start_time = time.perf_counter()
         detections = self.detector.detect(image)

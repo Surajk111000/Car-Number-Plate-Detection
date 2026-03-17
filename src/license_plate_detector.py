@@ -37,15 +37,19 @@ class LicensePlateTextDetector:
         
         self.confidence_threshold = confidence_threshold
         self.ocr = None
-        self._load_reader()
+        self._ocr_loaded = False
     
     def _load_reader(self) -> None:
-        """Load EasyOCR for text detection"""
+        """Lazy load EasyOCR for text detection on first use"""
+        if self._ocr_loaded:
+            return
+            
         logger.info("Initializing EasyOCR for text detection...")
         try:
             # EasyOCR with CPU optimization
             # Use allowed_languages to reduce model size
             self.ocr = easyocr.Reader(['en'], gpu=False, model_storage_directory='/tmp/easyocr')
+            self._ocr_loaded = True
             logger.info("[OK] EasyOCR detector loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load EasyOCR: {e}")
@@ -61,6 +65,10 @@ class LicensePlateTextDetector:
         Returns:
             Dictionary with detections in standard format
         """
+        # Lazy load OCR on first detection request
+        if self.ocr is None:
+            self._load_reader()
+            
         if self.ocr is None:
             logger.error("OCR not initialized")
             return self._empty_detections()

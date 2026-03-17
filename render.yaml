@@ -8,9 +8,17 @@ services:
       pip install --upgrade pip &&
       pip install -r requirements.txt
     startCommand: >
-      gunicorn app:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+      gunicorn app:app 
+      --worker-class uvicorn.workers.UvicornWorker 
+      --bind 0.0.0.0:$PORT 
+      --workers 1 
+      --worker-tmp-dir /dev/shm
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: ENABLE_OCR
+        value: "false"
+      - key: PYTHONHASHSEED
+        value: "0"
     maxInstances: 1
     numInstances: 1
